@@ -1,0 +1,131 @@
+---
+title: "Analysing livestock data"
+format: html
+editor: visual
+---
+
+```{r import library}
+library(dplyr)
+library(readxl)
+library(stringr)
+library(ggplot2)
+library(sf)
+library(cowplot)
+library(leaflet)
+```
+
+```{r data import}
+# get the names of the sheets in the excel workbook
+# excel_sheets('./data/Marigat Field data for sydromic Livestock 1.xlsx')
+
+### Import sheets with cattle data
+marigat.cattle1 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 1 cattle ')
+marigat.cattle2 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 2 cattle')
+
+### Import sheets for goats data
+marigat.goats1 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 1 goat')
+marigat.goats2 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 2 goat')  
+
+### Import sheep data 
+marigat.sheep1 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 1 sheep')
+marigat.sheep2 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 2 sheep')
+
+
+### shapefile for mapping
+kenya.shp <- st_read('./data/shapefiles/ken_adm_iebc_20191031_shp/ken_admbnda_adm0_iebc_20191031.shp')
+kenya.counties.shp <- st_read('./data/shapefiles/ken_adm_iebc_20191031_shp/ken_admbnda_adm1_iebc_20191031.shp')
+
+## Filter out Baringo County
+baringo <- kenya.counties.shp %>%
+  filter(ADM1_EN == 'Baringo') %>%
+  rename(County=ADM1_EN)
+```
+
+## Data wrangling
+
+Transforming the data to a format fit for analysis.
+
+```{r data wrangling}
+
+## Combine cattle data into one df
+marigat.cattle <- rbind(marigat.cattle1,marigat.cattle2)
+## create new variable to identify species
+marigat.cattle$species <- 'cattle'
+
+## Combine sheep data into one df
+### first of all drop the extra columns that are in marigat.sheep1 df otherwise we won't be able to bind them.
+marigat.sheep1 <- marigat.sheep1 %>% 
+  select(1:14)
+marigat.sheep <- rbind(marigat.sheep1,marigat.sheep2)
+## create new variable to identify species
+marigat.sheep$species <- 'sheep'
+
+## Combine goat data into one df
+### first of all drop the extra columns that are in marigat.goat1 df otherwise we won't be able to bind them.
+marigat.goats1 <- marigat.goats1 %>% 
+  select(1:14)
+marigat.goats <- rbind(marigat.goats1,marigat.goats2)
+## create new variable to identify species
+marigat.goats$species <- 'goat'
+
+## Combine all the three dataframes into one - good that we now have the species column which will differentiate them.
+marigat.data <- rbind(marigat.cattle,marigat.sheep,marigat.goats)
+
+## select needed variables: first 10 columns
+### would have selected them by name but seeing that they're arranged as required, easy to just select by index.
+marigat.data <- marigat.data %>% 
+  select(1:10,15)
+
+## Create dataframe for use in mapping
+### filter out rows where we have coordinates
+### Again, select first 6 columns which are required.
+### Drop the coordinates taken at Nancy Rotich's residence (wrong coordinates)
+
+marigat.map.df <- marigat.data %>%
+  filter(!is.na(Latitude) & Owner != 'Nancy Rotich' & Owner != 'Joseph parakurwo') %>%
+  select(1:6,11) %>%
+  mutate(Longitude=as.numeric(str_sub(Longitude,3)),
+         Latitude=as.numeric(str_sub(Latitude,3)))
+  
+```
+
+## 1. Mapping
+
+```{r map}
+
+## ggplot2 
+ggplot() +
+  geom_sf(data = kenya.counties.shp) +
+  geom_sf(data = baringo, aes(linetype=County,
+                                fill=County)) +
+  geom_point(data=marigat.map.df, 
+             aes(y = Latitude, x = Longitude), color='blue') +
+  theme_map() 
+
+## leaflet
+
+leaflet() %>%
+  setView(lng=mean(marigat.map.df$Longitude),lat=mean(marigat.map.df$Latitude),8) %>%
+  addTiles() %>%
+  addPolygons(data = kenya.counties.shp) %>%
+  addPolygons(data = baringo,
+              fillColor = 'green',
+              fillOpacity = 1) %>%
+  addMarkers(data = marigat.map.df,
+                   lng = ~Longitude,
+                   lat = ~Latitude) %>%
+  addLabelOnlyMarkers(lng = mean(marigat.map.df$Longitude),
+                      lat = mean(marigat.map.df$Latitude), 
+                      label = 'Baringo County',
+                      labelOptions = labelOptions(noHide = TRUE, direction = 'top', textOnly = TRUE)) %>%
+  addMiniMap()
+```
+
+## 2. Species and Clinical presentation
+
+```{r chisquare : species and clinical presentation}
+## Filter individual species 
+marigat.chsq.df <- marigat.data %>%
+  filter(is.na(Latitude)) %>%
+  select(`Field sample number`,species,`Clinical finding`)
+```
