@@ -12,6 +12,7 @@ library(ggplot2)
 library(sf)
 library(cowplot)
 library(leaflet)
+library(tidyr)
 ```
 
 ```{r data import}
@@ -30,23 +31,38 @@ marigat.goats2 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.
 marigat.sheep1 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 1 sheep')
 marigat.sheep2 <- read_xlsx('./data/Marigat Field data for sydromic Livestock 1.xlsx',sheet = 'Marigat 2 sheep')
 
+## Nguruman data
+#excel_sheets('./data/Nguruman field data for sydromic livestock 1.xlsx')
 
+nguruman.cattle1 <- read_xlsx('./data/Nguruman field data for sydromic livestock 1.xlsx',sheet = 'Nguruman 1 cattle')
+nguruman.cattle2 <- read_xlsx('./data/Nguruman field data for sydromic livestock 1.xlsx',sheet = 'Nguruman 2 cattle')
+nguruman.goat1 <- read_xlsx('./data/Nguruman field data for sydromic livestock 1.xlsx',sheet = 'Nguruman 1 goat')
+nguruman.goat2 <- read_xlsx('./data/Nguruman field data for sydromic livestock 1.xlsx',sheet = 'Nguruman 2 goat')
+nguruman.sheep1 <- read_xlsx('./data/Nguruman field data for sydromic livestock 1.xlsx',sheet = 'Nguruman 1 sheep')
+nguruman.sheep2 <- read_xlsx('./data/Nguruman field data for sydromic livestock 1.xlsx',sheet = 'Nguruman 2 sheep')
+
+
+```
+
+## Import shapefiles for mapping 
+
+```{r data import}
 ### shapefile for mapping
 kenya.shp <- st_read('./data/shapefiles/ken_adm_iebc_20191031_shp/ken_admbnda_adm0_iebc_20191031.shp')
 kenya.counties.shp <- st_read('./data/shapefiles/ken_adm_iebc_20191031_shp/ken_admbnda_adm1_iebc_20191031.shp')
 
 ## Filter out Baringo County
-baringo <- kenya.counties.shp %>%
-  filter(ADM1_EN == 'Baringo') %>%
-  rename(County=ADM1_EN)
+site.counties <- kenya.counties.shp %>%
+  filter(ADM1_EN %in% c('Baringo','Narok','Kajiado')) %>%
+  rename(County=ADM1_EN) 
+
+
 ```
 
 ## Data wrangling
 
 Transforming the data to a format fit for analysis.
-
 ```{r data wrangling}
-
 ## Combine cattle data into one df
 marigat.cattle <- rbind(marigat.cattle1,marigat.cattle2)
 ## create new variable to identify species
@@ -76,6 +92,12 @@ marigat.data <- rbind(marigat.cattle,marigat.sheep,marigat.goats)
 marigat.data <- marigat.data %>% 
   select(1:10,15)
 
+marigat.data$site <- 'marigat'
+
+```
+
+## Prepare data for mapping  
+```{r data wrangling}
 ## Create dataframe for use in mapping
 ### filter out rows where we have coordinates
 ### Again, select first 6 columns which are required.
@@ -89,34 +111,92 @@ marigat.map.df <- marigat.data %>%
   
 ```
 
-## 1. Mapping
+```{r}
+## Combine cattle data 
+names(nguruman.cattle1)
+nguruman.cattle1 <- nguruman.cattle1 %>%
+  select(-c(15:16))
+nguruman.cattle <- rbind(nguruman.cattle1,nguruman.cattle2)
+nguruman.cattle$species <- 'cattle'
+## combine sheep data
+names(nguruman.sheep2)
+nguruman.sheep1 <- nguruman.sheep1 %>%
+  select(-c(15:16)) %>%
+  rename('Field sample number'='...1')
+
+nguruman.sheep <- rbind(nguruman.sheep1,nguruman.sheep2)
+nguruman.sheep$species <- 'sheep'
+
+## combine goat
+names(nguruman.goat1)
+nguruman.goat1 <- nguruman.goat1 %>%
+  select(-c(15:16))
+
+nguruman.goats <- rbind(nguruman.goat1,nguruman.goat2)
+nguruman.goats$species <- 'species' 
+
+## combine all the three dataframes
+nguruman.data <- rbind(nguruman.cattle,nguruman.goats,nguruman.sheep)
+
+## seect necessary columns 
+nguruman.data <- nguruman.data %>%
+  select(1:10,15)
+
+```
+
+### Prepare nguruman data for mapping
+```{r}
+
+library(parzer) # converting degree coordinates to decimal
+
+cord.fix <- c('Nicholus matiko','Anita Namyak','Sampeta','Stephen muriaso',
+              'Paul Tingai','Joseph Kitao','Kishaalu Sosio')
+
+nguruman.data.strip <- nguruman.data %>%
+  select(1:6,11) %>%
+  mutate(Longitude=if_else(Owner %in% cord.fix,parse_lon(Longitude),as.double(Longitude)),
+         Latitude=if_else(Owner %in% cord.fix,parse_lat(Latitude),as.double(Latitude))) %>%
+  mutate(Latitude=if_else(Latitude < 0,1*Latitude,-1*Latitude))
+
+  
+```
+
+## Combine data for mapping
+```{r}
+
+mapping.df <- rbind(nguruman.data.strip,marigat.map.df)
+
+```
+
+
+## 1. Mapping 
 
 ```{r map}
 
 ## ggplot2 
 ggplot() +
   geom_sf(data = kenya.counties.shp) +
-  geom_sf(data = baringo, aes(linetype=County,
+  geom_sf(data = site.counties, aes(linetype=County,
                                 fill=County)) +
-  geom_point(data=marigat.map.df, 
+  geom_point(data=mapping.df, 
              aes(y = Latitude, x = Longitude), color='blue') +
   theme_map() 
 
 ## leaflet
 
 leaflet() %>%
-  setView(lng=mean(marigat.map.df$Longitude),lat=mean(marigat.map.df$Latitude),8) %>%
+  #setView(lng=mean(mapping.df$Longitude),lat=mean(mapping.df$Latitude),8) %>%
   addTiles() %>%
   addPolygons(data = kenya.counties.shp) %>%
-  addPolygons(data = baringo,
+  addPolygons(data = site.counties,
               fillColor = 'green',
               fillOpacity = 1) %>%
-  addMarkers(data = marigat.map.df,
+  addMarkers(data = mapping.df,
                    lng = ~Longitude,
                    lat = ~Latitude) %>%
-  addLabelOnlyMarkers(lng = mean(marigat.map.df$Longitude),
-                      lat = mean(marigat.map.df$Latitude), 
-                      label = 'Baringo County',
+  addLabelOnlyMarkers(lng = mean(mapping.df$Longitude),
+                      lat = mean(mapping.df$Latitude), 
+                      #label = ~site.counties$County,
                       labelOptions = labelOptions(noHide = TRUE, direction = 'top', textOnly = TRUE)) %>%
   addMiniMap()
 ```
@@ -127,5 +207,52 @@ leaflet() %>%
 ## Filter individual species 
 marigat.chsq.df <- marigat.data %>%
   filter(is.na(Latitude)) %>%
-  select(`Field sample number`,species,`Clinical finding`)
+  select(`Field sample number`,species,`Clinical finding`) %>%
+  separate(`Clinical finding`,sep = ',',into = c('clin.fin1','clin.fin2','clin.fin3')) %>%
+  as.data.frame()
+
+## clean the clinical presentations
+marigat.chsq.df <- marigat.chsq.df %>%
+  mutate(clin.fin2=case_when(
+    clin.fin1 == '38.5 Ticks' ~ 'Ticks',
+    clin.fin1 == 'Blody nasal discharge' ~ 'Bloody nasal discharge',
+    .default = clin.fin2
+  ),
+  clin.fin3=case_when(
+    clin.fin1 == '38.5 Ticks' ~ 'Emaciation',
+    clin.fin1 == 'Blody nasal discharge' ~ 'Cough',
+    .default = clin.fin3
+  ),
+  clin.fin1=recode(clin.fin1,'38.5 Ticks'='38.5','Blody nasal discharge'=''))
+  
+## Drop NA : On the clin.fin1 
+marigat.chsq.df <- marigat.chsq.df %>%
+  filter(!is.na(clin.fin1)) %>%
+  mutate(clin.fin1=case_when(
+    as.numeric(clin.fin1) <= 37.5 ~ 'low',
+    as.numeric(clin.fin1)  >37.5 & as.numeric(clin.fin1) <=39.5 ~ 'normal',
+    as.numeric(clin.fin1) >39.5 ~ 'high',
+    .default = clin.fin1
+  )) %>%
+  pivot_longer(cols = c(clin.fin1,clin.fin2,clin.fin3),
+               values_to = 'symptoms',names_to = 'var')
+
+marigat.chsq.df <- marigat.chsq.df %>%
+  mutate(symptoms=str_trim(symptoms),
+         symptoms=str_to_lower(symptoms),
+         symptoms=recode(symptoms,'emaciation'='emaciated','bloody diarrhoe'='bloody diarrhoea','coughing'='cough','diarhoea'='diarrhoea','arbotion'='abortion','diarrhoe'='diarrhoea',
+               'nasal dicharge'='nasal discharge','4o.4'='high','lethagy'='lethargy','diarhoe'='diarrhoea'))
+
+marigat.chsq.df %>% 
+  group_by(symptoms) %>%
+  summarize(distinct.clinical.presentations=n())
+
 ```
+
+
+## Chisquare tests 
+
+```{r}
+chisq.test(marigat.chsq.df$species,marigat.chsq.df$symptoms)
+```
+
